@@ -15,7 +15,7 @@ _Subprojects in scope:_
 
 > **Limite com a Fase 04:** publicação e visibilidade não são decididas aqui. Nesta fase, todo vídeo permanece privado ao dono do canal, mesmo quando o processamento termina.
 >
-> **Premissa de produção:** a produção será na AWS, conforme definido em 2026-11-22. O desenho da implantação continua pertencendo à Fase 07.
+> **Premissa de produção:** a produção será na AWS, por decisão do responsável pelo projeto em 2026-11-22. Como o storage produtivo será o Amazon S3, a fila gerenciada SQS mantém os dois serviços no mesmo provedor. Essa premissa não consta em `docs/project-plan.md`, e o desenho da implantação continua pertencendo à Fase 07.
 
 ---
 
@@ -51,9 +51,9 @@ _Subprojects in scope:_
 
 - Fila gerenciada na AWS, acessada por `@aws-sdk/client-sqs`. No Compose, `softwaremill/elasticmq-native:1.7.1` expõe a API compatível em `http://elasticmq:9324`.
 - **Pros:** Nenhum broker para operar em produção, escala independente do banco e DLQ nativa. Alinha a fila à produção na AWS. O SDK publica CommonJS, sem ajuste de ESM no Jest.
-- **Cons:** Não participa da transação do PostgreSQL, exigindo um reconciliador (TD-14). Backoff e heartbeat dependem de `ChangeMessageVisibility`, e não há agendamento nativo (TD-08). A fila Standard pode entregar duplicatas, e o ElasticMQ não valida IAM.
+- **Cons:** Não participa da transação do PostgreSQL, exigindo um reconciliador (TD-14). Backoff e heartbeat dependem de `ChangeMessageVisibility`, e não há agendamento nativo (TD-08). A fila Standard pode entregar duplicatas. O ElasticMQ não valida IAM e mantém as mensagens em memória, salvo se a persistência for habilitada.
 
-**Recommendation:** **Option D (SQS Standard + ElasticMQ)** — com produção na AWS, o serviço gerenciado remove a operação da fila e a carga de polling do PostgreSQL. O custo aceito é manter um reconciliador simples para a escrita dupla. FIFO não é necessário, porque a ordem entre vídeos não importa e o worker já é idempotente (TD-15). Usar `@aws-sdk/client-sqs` diretamente, com um loop de consumo próprio, porque o `sqs-consumer` 15 é ESM-only. Chaves de ambiente: `SQS_ENDPOINT` (somente local, com o nome do serviço Compose), `SQS_REGION`, `SQS_VIDEO_PROCESSING_QUEUE_URL` e `SQS_VIDEO_PROCESSING_DLQ_URL`.
+**Recommendation:** **Option D (SQS Standard + ElasticMQ)** — com produção na AWS, o serviço gerenciado remove a operação da fila e a carga de polling do PostgreSQL. O custo aceito é manter um reconciliador simples para a escrita dupla. FIFO não é necessário, porque a ordem entre vídeos não importa e o worker já é idempotente (TD-15). Usar `@aws-sdk/client-sqs` diretamente, com um loop de consumo próprio, porque o `sqs-consumer` 15 é ESM-only. Chaves de ambiente: `SQS_ENDPOINT` (somente local, com o nome do serviço Compose), `SQS_REGION`, `SQS_VIDEO_PROCESSING_QUEUE_URL` e `SQS_VIDEO_PROCESSING_DLQ_URL`. No Compose, habilitar `messages-storage` do ElasticMQ com H2 em `/data` e volume nomeado, para um restart do container não perder jobs. Filas persistidas têm precedência sobre o arquivo de configuração, então mudanças nas definições exigem recriar esse volume.
 
 **Decision:** _[pending]_
 
@@ -328,7 +328,7 @@ _Subprojects in scope:_
 - **Pros:** Sem colisões e com URLs muito curtas.
 - **Cons:** A ordem pode ser inferida, o que enfraquece vídeos unlisted.
 
-**Recommendation:** **Option A (base62 de 11 caracteres + `UNIQUE`)** — mantém a URL curta e adequada a links não listados sem adicionar dependência. Mesmo com 1 bilhão de vídeos, a chance de um novo slug colidir é de cerca de 2 × 10⁻¹¹, e a restrição do banco cobre esse caso.
+**Recommendation:** **Option A (base62 de 11 caracteres + `UNIQUE`)** — mantém a URL curta e adequada a links não listados sem adicionar dependência. Mesmo com 1 bilhão de vídeos, a chance de um novo slug colidir é de cerca de 2 × 10⁻¹¹, e a restrição do banco cobre esse caso. O `slug` é o identificador das rotas de acesso ao vídeo: `GET /videos/:slug`, `GET /videos/:slug/playback` e `GET /videos/:slug/download`. O UUID continua sendo a referência interna em chaves de storage, mensagens da fila e na orquestração do upload.
 
 **Decision:** _[pending]_
 
@@ -362,7 +362,7 @@ _Subprojects in scope:_
 - **Pros:** Nenhum serviço novo.
 - **Cons:** Contraria a arquitetura e faz o processamento competir por CPU e memória com as requisições.
 
-**Recommendation:** **Option A (mesmo código, container separado)** — cumpre o diagrama sem duplicar o domínio. Usar concorrência inicial de 1 job por réplica, e não adotar `fluent-ffmpeg`, que está marcado como descontinuado no npm.
+**Recommendation:** **Option A (mesmo código, container separado)** — cumpre o diagrama sem duplicar o domínio. Usar concorrência inicial de 1 job por réplica, e não adotar `fluent-ffmpeg`, que está marcado como descontinuado no npm. No desenvolvimento, `nestjs-api` e `video-worker` usam o mesmo `Dockerfile.dev` com FFmpeg, mantendo `docker compose exec nestjs-api npm test -- --runInBand` como comando único da suíte. A separação de imagens de produção fica para a Fase 07.
 
 **Decision:** _[pending]_
 
@@ -414,9 +414,9 @@ _Subprojects in scope:_
 
 ### Option A: Allowlist validada com ffprobe, sem transcodificar
 
-- Aceita MP4/MOV e WebM com vídeo H.264, VP8, VP9 ou AV1 e áudio AAC, MP3, Opus ou Vorbis. Outros formatos terminam em `failed` com código `UNSUPPORTED_FORMAT`.
-- **Pros:** Mantém o escopo do plano e garante que `ready` signifique reproduzível nos navegadores-alvo.
-- **Cons:** Rejeita MKV, AVI e HEVC até existir transcodificação.
+- Aceita apenas estas combinações, com vídeo de 8 bits em 4:2:0 (`yuv420p` ou `yuvj420p`) e áudio opcional: MP4/MOV com H.264 e AAC ou MP3, servidos como `video/mp4`; WebM com VP8, VP9 ou AV1 e Opus ou Vorbis, servidos como `video/webm`. Outros formatos terminam em `failed` com código `UNSUPPORTED_FORMAT`.
+- **Pros:** Mantém o escopo do plano e faz `ready` indicar uma combinação compatível com navegadores atuais.
+- **Cons:** Rejeita MKV, AVI, HEVC e vídeos em 10 bits ou 4:2:2 até existir transcodificação. Navegadores antigos ainda podem não decodificar AV1.
 
 ### Option B: Transcodificar tudo para MP4 H.264/AAC
 
@@ -442,13 +442,13 @@ _Subprojects in scope:_
 
 **Capability:** Transversal — covers: "Reprodução via streaming (sem necessidade de download completo)", "Download do vídeo pelo usuário"
 
-**Context:** A API autentica com `Authorization: Bearer`, mas um elemento `<video>` não envia esse header. O diagrama indica streaming direto do storage, que já responde `206` a requisições Range. Nesta fase, o acesso fica restrito ao dono do canal. Depende de TD-04 e TD-12.
+**Context:** A API autentica com `Authorization: Bearer`, mas um elemento `<video>` não envia esse header. O diagrama indica streaming direto do storage, que já responde `206` a requisições Range. Nesta fase, o acesso fica restrito ao dono do canal. Depende de TD-04, TD-09 e TD-12.
 
 **Options:**
 
 ### Option A: API retorna URLs pré-assinadas em JSON
 
-- `GET /videos/:id/playback` e `GET /videos/:id/download` autorizam o dono e retornam `{ url, expiresAt }`. O storage atende Range/206.
+- `GET /videos/:slug/playback` e `GET /videos/:slug/download` autorizam o dono e retornam `{ url, expiresAt }`. O storage atende Range/206.
 - **Impacto:** o frontend futuro obtém a URL pelo BFF e a usa no player ou no download.
 - **Pros:** API fora do caminho dos bytes e contrato simples para o BFF. Download e reprodução diferem só nos headers assinados.
 - **Cons:** A URL é uma credencial temporária, e o player precisa renovar quando ela expirar.
@@ -501,7 +501,7 @@ _Subprojects in scope:_
 - **Pros:** Mais visibilidade do progresso.
 - **Cons:** Mais transições e testes, sem capability que exija esse detalhe.
 
-**Recommendation:** **Option A (status do pipeline)** — preserva o ciclo pedido e deixa a publicação para a Fase 04. Com TD-01 Option D, a API faz commit de `draft → processing` com `job_enqueued_at` nulo, chama `SendMessage` e então preenche esse campo. Um reconciliador no `video-worker` reenvia vídeos em `processing` com `job_enqueued_at` nulo há mais de 1 minuto, usando `FOR UPDATE SKIP LOCKED`. Um eventual reenvio duplicado é seguro pelo TD-15. `processing → ready` grava duração, metadados e thumbnail em um único `UPDATE`.
+**Recommendation:** **Option A (status do pipeline)** — preserva o ciclo pedido e deixa a publicação para a Fase 04. Com TD-01 Option D, a API faz commit de `draft → processing` com `job_enqueued_at` nulo, chama `SendMessage` e então preenche esse campo. Um reconciliador no `video-worker`, usando `FOR UPDATE SKIP LOCKED`, reenvia vídeos em `processing` em dois casos: `job_enqueued_at` nulo há mais de 1 minuto (falha entre o commit e o `SendMessage`) ou `job_enqueued_at` anterior a 2h30 (mensagem perdida). O segundo limite fica acima das 4 execuções previstas no TD-15, que somam cerca de 2h05, e cada reenvio atualiza `job_enqueued_at`. Com fila acumulada, o reenvio pode gerar duplicatas, que o TD-15 torna seguras. `processing → ready` grava duração, metadados e thumbnail em um único `UPDATE`.
 
 **Decision:** _[pending]_
 
@@ -541,6 +541,7 @@ _Subprojects in scope:_
 - `VisibilityTimeout` de 120s, renovado a cada 40s por `ChangeMessageVisibility` enquanto o FFmpeg roda, com limite de 30 minutos por execução imposto pelo worker.
 - Em erro transitório, ajustar a visibilidade para 30s, 60s e 120s, criando o backoff. Em erro permanente, marcar `failed` e chamar `DeleteMessage`.
 - Um consumidor da DLQ marca o vídeo como `failed` com o código `PROCESSING_EXHAUSTED`.
+- O handler confere o status ao iniciar e apaga a mensagem sem processar quando o vídeo não está mais em `processing`.
 - A escrita final usa `WHERE status = 'processing'`, então duplicatas não alteram um vídeo já concluído.
 
 **Decision:** _[pending]_
@@ -578,11 +579,12 @@ _Subprojects in scope:_
 **Recommendation:** **Option A (Compose real)**, com estas regras:
 
 - Bucket `streamtube-test` e filas de teste dedicadas no ElasticMQ, limpas com `PurgeQueue`, com `--runInBand`.
+- Banco `streamtube_test` dedicado para toda a suíte, para a limpeza e o reconciliador do `video-worker` não atuarem sobre dados de teste, nem o teste de migrations remover tabelas em uso. A aplicação lê `DB_NAME` e `createTestDataSource` lê `DB_DATABASE`, então as duas variáveis devem apontar para esse banco. A criação precisa ser idempotente, porque scripts de inicialização do PostgreSQL não rodam em um volume já existente.
 - Permissões IAM e a integração com SQS real ficam para um smoke test na AWS, pois o ElasticMQ não autentica requisições.
 - Fixtures pequenas geradas por FFmpeg, incluindo MP4 com `moov` no final, e um teste que confirme a leitura parcial.
 - Teste do limite com valor reduzido por env, sem enviar 10GB na suíte. O upload real de 10GB fica como smoke test manual.
 - Para testar URLs públicas dentro do container, conectar em `minio:9000` preservando `Host: localhost:9000` com `http.request`, pois `fetch` não permite definir esse header.
-- Testes que dependem de FFmpeg rodam no container `video-worker`.
+- Testes que dependem de FFmpeg rodam no `nestjs-api`, que usa a mesma imagem de desenvolvimento do `video-worker` (TD-10).
 
 **Decision:** _[pending]_
 
@@ -625,6 +627,7 @@ _Subprojects in scope:_
 **Não executado, a validar na primeira tarefa de implementação:**
 
 - `@aws-sdk/client-sqs` contra o ElasticMQ 1.7.1, incluindo DLQ, heartbeat e backoff por visibilidade.
+- Persistência de mensagens do ElasticMQ após restart. O README e o exemplo de Compose da tag `v1.7.1` documentam H2 na imagem nativa, mas o comportamento ainda não foi testado.
 - Build da imagem do MinIO e fluxo real de multipart, CORS e `Content-Length` assinado.
 - Leitura parcial por Range com ffprobe e ffmpeg 5.1.9.
 
