@@ -1,7 +1,7 @@
 ---
 scope_type: phase
 related_phases: [3]
-status: pending
+status: decided
 date: 2026-11-22
 scope_description: "Backend da Fase 03: fila de processamento, uso do object storage S3/MinIO, upload de até 10GB, pré-cadastro do rascunho, worker FFmpeg, URL única, streaming, download, ciclo de status e estratégia de testes com a infraestrutura real do Compose."
 ---
@@ -55,7 +55,8 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option D (SQS Standard + ElasticMQ)** — com produção na AWS, o serviço gerenciado remove a operação da fila e a carga de polling do PostgreSQL. O custo aceito é manter um reconciliador simples para a escrita dupla. FIFO não é necessário, porque a ordem entre vídeos não importa e o worker já é idempotente (TD-15). Usar `@aws-sdk/client-sqs` diretamente, com um loop de consumo próprio, porque o `sqs-consumer` 15 é ESM-only. Chaves de ambiente: `SQS_ENDPOINT` (somente local, com o nome do serviço Compose), `SQS_REGION`, `SQS_VIDEO_PROCESSING_QUEUE_URL` e `SQS_VIDEO_PROCESSING_DLQ_URL`. No Compose, habilitar `messages-storage` do ElasticMQ com H2 em `/data` e volume nomeado, para um restart do container não perder jobs. Filas persistidas têm precedência sobre o arquivo de configuração, então mudanças nas definições exigem recriar esse volume.
 
-**Decision:** _[pending]_
+**Decision:** D (SQS Standard + ElasticMQ)
+**Libraries:** @aws-sdk/client-sqs@3.1175.0
 
 ---
 
@@ -89,7 +90,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (build da tag oficial)** — para um storage usado apenas em desenvolvimento e testes, reprodutibilidade e ausência de terceiros pesam mais que o tempo do primeiro build. O risco dos CVEs é contido ao não expor a porta fora da máquina. Esta imagem é exclusiva do ambiente local, pois a produção usará Amazon S3.
 
-**Decision:** _[pending]_
+**Decision:** A (Build local da tag oficial fixada)
 
 ---
 
@@ -123,7 +124,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (um bucket com prefixo por `videoId`)** — atende aos dois tipos de arquivo com a menor configuração e sustenta a idempotência do worker. O nome original nunca entra na chave.
 
-**Decision:** _[pending]_
+**Decision:** A (Um bucket privado com prefixo por vídeo)
 
 ---
 
@@ -157,7 +158,8 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (dois endpoints)** — é a solução mais simples e previsível. **Exceção documentada:** `S3_PUBLIC_ENDPOINT` é o único valor que pode usar `localhost`, porque é consumido pelo navegador no host e nunca é aberto por um container. Ele deve ser obrigatório no Joi, sem default. Os clientes usam `forcePathStyle: true`, e o cliente de presign usa `requestChecksumCalculation: 'WHEN_REQUIRED'` para não incluir checksum automático em URLs de `UploadPart`.
 
-**Decision:** _[pending]_
+**Decision:** A (Dois endpoints explícitos)
+**Libraries:** @aws-sdk/client-s3@3.1175.0, @aws-sdk/s3-request-presigner@3.1175.0
 
 ---
 
@@ -200,7 +202,8 @@ _Subprojects in scope:_
 - **CORS local:** `MINIO_API_CORS_ALLOW_ORIGIN=http://localhost:3001`. O MinIO expõe `ETag` nesse handler global, e `PutBucketCors` é uma chamada sem efeito nele.
 - **CORS em S3 real:** `PutBucketCors` com `ExposeHeaders: ['ETag']`.
 
-**Decision:** _[pending]_
+**Decision:** A (S3 Multipart com URLs pré-assinadas)
+**Libraries:** @aws-sdk/client-s3@3.1175.0, @aws-sdk/s3-request-presigner@3.1175.0
 
 ---
 
@@ -228,7 +231,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (chamada única)** — o pré-cadastro é consequência automática de iniciar o upload. Se a persistência falhar depois de criar o multipart, a API aborta o upload. Uma queda nesse intervalo é coberta pela rede de segurança do TD-08.
 
-**Decision:** _[pending]_
+**Decision:** A (Chamada única cria upload e rascunho)
 
 ---
 
@@ -262,7 +265,8 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (`ListParts` + `HeadObject`)** — é a única opção com comportamento igual nos dois storages. Divergência antes da conclusão mantém o rascunho retomável. Divergência depois da conclusão remove o objeto e marca o vídeo como `failed`.
 
-**Decision:** _[pending]_
+**Decision:** A (ListParts + HeadObject)
+**Libraries:** @aws-sdk/client-s3@3.1175.0
 
 ---
 
@@ -296,7 +300,11 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (varredura guiada pelo banco)**, com sessão de 48h. Essa janela cobre 10 GiB em conexão de cerca de 1 Mbps (aproximadamente 24h). Como rede de segurança para órfãos, usar `MINIO_API_STALE_UPLOADS_EXPIRY=72h` localmente e lifecycle equivalente em S3 real, sempre acima da validade da sessão. Como o SQS não agenda execuções, a varredura roda no `video-worker` com `@nestjs/schedule` 6.1.3, a linha CommonJS compatível com NestJS 11. A seleção usa `FOR UPDATE SKIP LOCKED`, para réplicas não processarem o mesmo rascunho.
 
-**Decision:** _[pending]_
+**Decision:** A (Varredura guiada pelo banco)
+**Libraries:** @nestjs/schedule@6.1.3
+
+**Revisions:**
+- 2026-11-22 — Varredura remove `source` de rascunhos expirados antes de apagar o registro. Rationale: após `CompleteMultipartUpload` sem nova tentativa do cliente, o objeto ficaria órfão. A varredura chama `AbortMultipartUpload` e `DeleteObject` em `videos/{videoId}/source`, tolerando ausência.
 
 ---
 
@@ -330,7 +338,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (base62 de 11 caracteres + `UNIQUE`)** — mantém a URL curta e adequada a links não listados sem adicionar dependência. Mesmo com 1 bilhão de vídeos, a chance de um novo slug colidir é de cerca de 2 × 10⁻¹¹, e a restrição do banco cobre esse caso. O `slug` é o identificador das rotas de acesso ao vídeo: `GET /videos/:slug`, `GET /videos/:slug/playback` e `GET /videos/:slug/download`. O UUID continua sendo a referência interna em chaves de storage, mensagens da fila e na orquestração do upload. Quando a inserção ocorrer dentro de uma transação, como no TD-17, cada tentativa usa `SAVEPOINT`, porque uma violação `23505` aborta a transação no PostgreSQL.
 
-**Decision:** _[pending]_
+**Decision:** A (Slug base62 + UNIQUE)
 
 ---
 
@@ -364,7 +372,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (mesmo código, container separado)** — cumpre o diagrama sem duplicar o domínio. Usar concorrência inicial de 1 job por réplica, e não adotar `fluent-ffmpeg`, que está marcado como descontinuado no npm. No desenvolvimento, `nestjs-api` e `video-worker` usam o mesmo `Dockerfile.dev` com FFmpeg, mantendo `docker compose exec nestjs-api npm test -- --runInBand` como comando único da suíte. A separação de imagens de produção fica para a Fase 07.
 
-**Decision:** _[pending]_
+**Decision:** A (video-worker no mesmo projeto)
 
 ---
 
@@ -398,7 +406,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (HTTP Range)** — é a opção que atende ao requisito sem perder compatibilidade com MP4. Usar `-protocol_whitelist` restrito, para um arquivo malicioso não acionar outros protocolos, além de timeout e redação da URL nos logs. A imagem Debian bookworm instala FFmpeg 5.1.9, portanto usar apenas opções existentes nessa versão (`reconnect_max_retries`, por exemplo, não existe nela). Thumbnail proposta: frame em 10% da duração, com fallback para o primeiro frame.
 
-**Decision:** _[pending]_
+**Decision:** A (HTTP Range com URL interna)
 
 ---
 
@@ -432,7 +440,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (allowlist sem transcodificação)** — respeita o escopo da fase e mantém o status confiável. A perda é real: parte dos arquivos comuns será recusada até uma fase futura decidir por transcodificação.
 
-**Decision:** _[pending]_
+**Decision:** A (Allowlist sem transcodificação)
 
 ---
 
@@ -469,7 +477,11 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (URLs pré-assinadas em JSON)** — aproveita o Range nativo do storage e funciona com o BFF já decidido. Assinar `ResponseContentType` com o tipo validado pelo ffprobe e `ResponseContentDisposition` (`inline` no streaming, `attachment` com nome sanitizado no download). Validade proposta: `max(1h, 2 × duração)` para streaming e 6h para download. As rotas só assinam URLs para vídeos em `ready`. Nos demais status, respondem `409` com o código `VIDEO_NOT_READY`, no envelope de `phase-02-auth/TD-07`. As regras de acesso público ficam para as Fases 04 e 05.
 
-**Decision:** _[pending]_
+**Decision:** A (URLs pré-assinadas em JSON)
+**Libraries:** @aws-sdk/s3-request-presigner@3.1175.0
+
+**Revisions:**
+- 2026-11-22 — Validade de streaming limitada a `min(7 dias, max(1h, 2 × duração))`. Rationale: URLs SigV4 aceitam no máximo 604.800 segundos, e o player renova a URL quando ela expira.
 
 ---
 
@@ -503,7 +515,7 @@ _Subprojects in scope:_
 
 **Recommendation:** **Option A (status do pipeline)** — preserva o ciclo pedido e deixa a publicação para a Fase 04. Com TD-01 Option D, a API faz commit de `draft → processing` com `job_enqueued_at` nulo, chama `SendMessage` e então preenche esse campo. Um reconciliador no `video-worker`, usando `FOR UPDATE SKIP LOCKED`, reenvia vídeos em `processing` em dois casos: `job_enqueued_at` nulo há mais de 1 minuto (falha entre o commit e o `SendMessage`) ou `job_enqueued_at` anterior a 2h30 (mensagem perdida). O segundo limite fica acima das 4 execuções previstas no TD-15, que somam cerca de 2h05, e cada reenvio atualiza `job_enqueued_at`. Com fila acumulada, o reenvio pode gerar duplicatas, que o TD-15 torna seguras. `processing → ready` grava duração, metadados e thumbnail em um único `UPDATE`.
 
-**Decision:** _[pending]_
+**Decision:** A (Status do pipeline)
 
 ---
 
@@ -544,7 +556,7 @@ _Subprojects in scope:_
 - O handler confere o status ao iniciar e apaga a mensagem sem processar quando o vídeo não está mais em `processing`.
 - A escrita final usa `WHERE status = 'processing'`, então duplicatas não alteram um vídeo já concluído.
 
-**Decision:** _[pending]_
+**Decision:** A (At-least-once idempotente)
 
 ---
 
@@ -586,7 +598,7 @@ _Subprojects in scope:_
 - Para testar URLs públicas dentro do container, conectar em `minio:9000` preservando `Host: localhost:9000` com `http.request`, pois `fetch` não permite definir esse header.
 - Testes que dependem de FFmpeg rodam no `nestjs-api`, que usa a mesma imagem de desenvolvimento do `video-worker` (TD-10).
 
-**Decision:** _[pending]_
+**Decision:** A (Pirâmide com Compose real)
 
 ---
 
@@ -642,7 +654,8 @@ _Subprojects in scope:_
 - **Uploads ativos:** máximo de 3 por canal, contando `draft` com `upload_expires_at` futuro, o que limita a 30 GiB o volume em andamento. A API faz uma checagem antes de `CreateMultipartUpload`. Depois, em transação, bloqueia o canal com `FOR UPDATE`, reconta e insere o rascunho. Se o limite foi atingido, aborta o multipart e responde `409` com `ACTIVE_UPLOAD_LIMIT_REACHED`, no envelope de `phase-02-auth/TD-07`.
 - **Limitações aceitas:** com várias réplicas da API, o limite efetivo do throttler em memória se multiplica, e um storage compartilhado fica para a Fase 07. O limite de uploads ativos permanece exato por estar no banco. Esta política não cria cota total de armazenamento por canal, porque o plano não define esse requisito.
 
-**Decision:** _[pending]_
+**Decision:** A (@Throttle por usuário + limite de uploads ativos)
+**Libraries:** @nestjs/throttler@^6.5.0
 
 ---
 
@@ -689,7 +702,7 @@ _Subprojects in scope:_
 - **Acesso:** as rotas do TD-13 não assinam URLs para vídeos em `failed`.
 - **Recuperação:** não há endpoint nesta fase. Dentro dos 7 dias, uma operação manual pode devolver o vídeo a `processing`, limpar os campos de falha e de purge e deixar `job_enqueued_at` nulo, para o reconciliador do TD-14 reenviar o job.
 
-**Decision:** _[pending]_
+**Decision:** D (Retenção por classe de falha)
 
 ---
 
@@ -697,24 +710,24 @@ _Subprojects in scope:_
 
 | ID | Scope | Decision | Recommendation | Choice |
 |----|-------|----------|---------------|--------|
-| TD-01 | Backend | Tecnologia da fila de processamento | D — SQS Standard + ElasticMQ local | _[pending]_ |
-| TD-02 | Repo-wide | Obtenção da imagem local do MinIO | A — build da tag oficial fixada | _[pending]_ |
-| TD-03 | Backend | Organização de buckets e chaves | A — um bucket com prefixo por `videoId` | _[pending]_ |
-| TD-04 | Backend | Endpoints do storage e URLs pré-assinadas | A — endpoints interno e público | _[pending]_ |
-| TD-05 | Cross-layer | Protocolo de upload de até 10GB | A — S3 Multipart pré-assinado | _[pending]_ |
-| TD-06 | Backend | Pré-cadastro automático do rascunho | A — chamada única em `POST /videos` | _[pending]_ |
-| TD-07 | Backend | Validação do tamanho real ao concluir | A — `ListParts` + `HeadObject` | _[pending]_ |
-| TD-08 | Backend | Limpeza de uploads abandonados | A — varredura guiada pelo banco | _[pending]_ |
-| TD-09 | Backend | Geração da URL única do vídeo | A — base62 de 11 caracteres + `UNIQUE` | _[pending]_ |
-| TD-10 | Backend | Execução do worker de vídeo | A — `video-worker` no mesmo projeto | _[pending]_ |
-| TD-11 | Backend | Extração sem cópia integral | A — HTTP Range com URL interna | _[pending]_ |
-| TD-12 | Backend | Formatos aceitos para reprodução | A — allowlist sem transcodificação | _[pending]_ |
-| TD-13 | Cross-layer | Entrega de streaming e download | A — URLs pré-assinadas em JSON | _[pending]_ |
-| TD-14 | Backend | Modelo de status do vídeo | A — status do pipeline | _[pending]_ |
-| TD-15 | Backend | Retentativas, idempotência e falhas | A — at-least-once idempotente | _[pending]_ |
-| TD-16 | Backend | Estratégia de testes | A — pirâmide com Compose real | _[pending]_ |
-| TD-17 | Backend | Política de limites dos endpoints de vídeo | A — `@Throttle` por usuário + limite de uploads ativos | _[pending]_ |
-| TD-18 | Backend | Destino dos objetos de vídeos em `failed` | D — retenção por classe de falha | _[pending]_ |
+| TD-01 | Backend | Tecnologia da fila de processamento | D — SQS Standard + ElasticMQ local | D (SQS Standard + ElasticMQ) |
+| TD-02 | Repo-wide | Obtenção da imagem local do MinIO | A — build da tag oficial fixada | A (Build local da tag oficial fixada) |
+| TD-03 | Backend | Organização de buckets e chaves | A — um bucket com prefixo por `videoId` | A (Um bucket privado com prefixo por vídeo) |
+| TD-04 | Backend | Endpoints do storage e URLs pré-assinadas | A — endpoints interno e público | A (Dois endpoints explícitos) |
+| TD-05 | Cross-layer | Protocolo de upload de até 10GB | A — S3 Multipart pré-assinado | A (S3 Multipart com URLs pré-assinadas) |
+| TD-06 | Backend | Pré-cadastro automático do rascunho | A — chamada única em `POST /videos` | A (Chamada única cria upload e rascunho) |
+| TD-07 | Backend | Validação do tamanho real ao concluir | A — `ListParts` + `HeadObject` | A (ListParts + HeadObject) |
+| TD-08 | Backend | Limpeza de uploads abandonados | A — varredura guiada pelo banco | A (Varredura guiada pelo banco) |
+| TD-09 | Backend | Geração da URL única do vídeo | A — base62 de 11 caracteres + `UNIQUE` | A (Slug base62 + UNIQUE) |
+| TD-10 | Backend | Execução do worker de vídeo | A — `video-worker` no mesmo projeto | A (video-worker no mesmo projeto) |
+| TD-11 | Backend | Extração sem cópia integral | A — HTTP Range com URL interna | A (HTTP Range com URL interna) |
+| TD-12 | Backend | Formatos aceitos para reprodução | A — allowlist sem transcodificação | A (Allowlist sem transcodificação) |
+| TD-13 | Cross-layer | Entrega de streaming e download | A — URLs pré-assinadas em JSON | A (URLs pré-assinadas em JSON) |
+| TD-14 | Backend | Modelo de status do vídeo | A — status do pipeline | A (Status do pipeline) |
+| TD-15 | Backend | Retentativas, idempotência e falhas | A — at-least-once idempotente | A (At-least-once idempotente) |
+| TD-16 | Backend | Estratégia de testes | A — pirâmide com Compose real | A (Pirâmide com Compose real) |
+| TD-17 | Backend | Política de limites dos endpoints de vídeo | A — `@Throttle` por usuário + limite de uploads ativos | A (@Throttle por usuário + limite de uploads ativos) |
+| TD-18 | Backend | Destino dos objetos de vídeos em `failed` | D — retenção por classe de falha | D (Retenção por classe de falha) |
 
 ---
 
