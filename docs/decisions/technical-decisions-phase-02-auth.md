@@ -238,6 +238,9 @@ _Subprojects in scope:_
 
 **Decision:** A (@nestjs/throttler)
 
+**Revisions:**
+- 2026-11-22 — `ThrottlerGuard` é global via `APP_GUARD`, não restrito ao `AuthModule`. Rationale: alinha o TD ao código atual. As rotas de vídeo seguem `phase-03-videos/TD-17`, e as rotas `@Public()` mantêm 10 requisições por 60 segundos.
+
 ---
 
 ## TD-09: Refresh Token Format

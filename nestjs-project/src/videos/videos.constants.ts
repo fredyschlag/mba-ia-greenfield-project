@@ -1,0 +1,24 @@
+export const VIDEO_PART_SIZE_BYTES = 16_777_216;
+export const MAX_ACTIVE_UPLOADS_PER_CHANNEL = 3;
+export const UPLOAD_SESSION_MS = 48 * 60 * 60 * 1000;
+export const MAX_PARTS_PER_SIGN_BATCH = 50;
+export const MAX_VIDEO_PARTS = 640;
+
+export const VIDEO_SLUG_LENGTH = 11;
+export const VIDEO_SLUG_ALPHABET =
+  '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+export const VIDEO_SLUG_MAX_ATTEMPTS = 5;
+
+export const THUMBNAIL_URL_TTL_SECONDS = 60 * 60;
+export const PLAYBACK_URL_MIN_TTL_SECONDS = 60 * 60;
+// SigV4 presigned URLs accept at most 7 days.
+export const PLAYBACK_URL_MAX_TTL_SECONDS = 7 * 24 * 60 * 60;
+export const DOWNLOAD_URL_TTL_SECONDS = 6 * 60 * 60;
+export const DOWNLOAD_FILENAME_MAX_LENGTH = 150;
+export const DOWNLOAD_FILENAME_FALLBACK = 'video';
+
+export const VIDEO_FAILURE_CODES = {
+  SIZE_MISMATCH: 'SIZE_MISMATCH',
+  UNSUPPORTED_FORMAT: 'UNSUPPORTED_FORMAT',
+  PROCESSING_EXHAUSTED: 'PROCESSING_EXHAUSTED',
+} as const;

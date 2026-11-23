@@ -1,6 +1,7 @@
 services:
   nestjs-api:
-    build: 
+    image: nestjs-project-nestjs-api
+    build:
       context: .
       dockerfile: Dockerfile.dev
     ports:
@@ -11,6 +12,36 @@ services:
       db:
         condition: service_healthy
       mailpit:
+        condition: service_started
+      minio:
+        condition: service_healthy
+      elasticmq:
+        condition: service_started
+
+  video-worker:
+    image: nestjs-project-nestjs-api
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    command:
+      - sh
+      - -c
+      - |
+        until [ -f node_modules/.package-lock.json ] && [ -x node_modules/.bin/nest ]; do
+          echo 'video-worker: waiting for npm install'
+          sleep 2
+        done
+        exec npm run start:worker:dev
+    init: true
+    restart: unless-stopped
+    volumes:
+      - .:/home/node/app
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      elasticmq:
         condition: service_started
 
   db:
@@ -33,4 +64,30 @@ services:
       - "1025:1025"
       - "8025:8025"
 
+  minio:
+    build:
+      context: ./docker/minio
+    ports:
+      - "127.0.0.1:9000:9000"
+    environment:
+      - MINIO_ROOT_USER=${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID must be set in .env}
+      - MINIO_ROOT_PASSWORD=${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY must be set in .env}
+      - MINIO_API_CORS_ALLOW_ORIGIN=http://localhost:3001
+      - MINIO_API_STALE_UPLOADS_EXPIRY=72h
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
+  elasticmq:
+    image: softwaremill/elasticmq-native:1.7.1
+    volumes:
+      - ./docker/elasticmq/elasticmq.conf:/opt/elasticmq.conf:ro
+      - elasticmq-data:/data
+
+volumes:
+  minio-data:
+  elasticmq-data:

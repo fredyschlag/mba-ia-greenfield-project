@@ -2,9 +2,11 @@
   "moduleFileExtensions": ["js", "json", "ts"],
   "rootDir": ".",
   "testEnvironment": "node",
+  "maxWorkers": 1,
   "testRegex": ".e2e-spec.ts$",
   "transform": {
     "^.+\\.(t|j)s$": "ts-jest"
   },
-  "setupFiles": ["dotenv/config"]
+  "globalSetup": "<rootDir>/../src/test/global-setup.ts",
+  "setupFiles": ["<rootDir>/../src/test/test-env.setup.ts", "dotenv/config"]
 }

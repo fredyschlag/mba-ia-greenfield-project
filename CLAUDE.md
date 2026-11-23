@@ -8,11 +8,11 @@ More info in the project overview: [docs/project-plan.md](docs/project-plan.md)
 
 ## Repository Structure
 
-This is a monorepo with two main areas:
+This is a monorepo with three main areas:
 
-- `nestjs-project/` — Backend API (NestJS 11, TypeScript, Express). Contains modules for users, channels, videos, comments, etc.
+- `nestjs-project/` — Backend API and video worker (NestJS 11, TypeScript, Express). Contains the auth, users, channels, videos, storage and queue modules.
 - `docs/` — Project documentation, architecture diagrams, and planning.
-- `next-frontend/` (Next.js) — not yet initialized
+- `next-frontend/` — Frontend (Next.js) with the home, signup, login and forgot-password pages. The video UI is not implemented yet.
 
 ## Architecture (C4 Container Diagram)
 
@@ -20,10 +20,10 @@ See `docs/diagrams/software-arch.mermaid` for the full diagram. Key containers:
 
 - **Frontend** (Next.js) → calls API via REST, streams from Object Storage
 - **API** (Nest.js) → business rules, auth, reads/writes DB, uploads to storage, publishes jobs to queue, sends emails
-- **Video Worker** (FFmpeg) → consumes jobs from queue, processes videos, updates DB and storage
+- **Video Worker** (FFmpeg) → `video-worker` Compose service, a second NestJS entry point (`nestjs-project/src/worker.ts`) with no HTTP server. Consumes jobs from queue, processes videos, updates DB and storage
 - **Database** (PostgreSQL) → users, channels, videos, comments, likes
-- **Object Storage** (S3/MinIO) → video files and thumbnails
-- **Message Queue** (TBD) → video processing job queue
+- **Object Storage** (Amazon S3; MinIO in development) → video files and thumbnails
+- **Message Queue** (Amazon SQS; ElasticMQ in development) → video processing job queue and its dead-letter queue
 - **Email Service** (SMTP) → account confirmation and password recovery
 
 ## Docker Networking
@@ -36,6 +36,8 @@ Inside a container, `localhost` refers to the container itself, not the host mac
 - **Wrong:** `DB_HOST=localhost`
 
 This applies to all environment variables, configuration files, and code that references service hosts.
+
+**Only exception:** `S3_PUBLIC_ENDPOINT=http://localhost:9000`. Presigned URLs are opened by the browser on the host, and the host is part of the signature, so this value must be the address the browser reaches. Server-side storage calls keep using `S3_ENDPOINT=http://minio:9000`. To call a public presigned URL from inside a container, connect to `minio:9000` and send the signed `Host: localhost:9000` header.
 
 ## Working Principles
 

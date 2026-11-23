@@ -128,4 +128,129 @@ describe('exportSpec (integration)', () => {
       }
     }
   });
+
+  describe('video endpoints', () => {
+    const apiErrorRef = '#/components/schemas/ApiErrorEnvelope';
+    const videoOperations = [
+      {
+        path: '/videos',
+        method: 'post',
+        success: '201',
+        errors: ['400', '401', '404', '409', '413', '429'],
+      },
+      {
+        path: '/videos/{id}/upload/part-urls',
+        method: 'post',
+        success: '201',
+        errors: ['400', '401', '404', '409', '410', '429'],
+      },
+      {
+        path: '/videos/{id}/upload/parts',
+        method: 'get',
+        success: '200',
+        // ParseUUIDPipe answers 400 for a malformed :id.
+        errors: ['400', '401', '404', '409', '410', '429'],
+      },
+      {
+        path: '/videos/{id}/upload/complete',
+        method: 'post',
+        success: '202',
+        errors: ['400', '401', '404', '409', '410', '422', '429'],
+      },
+      {
+        path: '/videos/{slug}',
+        method: 'get',
+        success: '200',
+        errors: ['401', '404', '429'],
+      },
+      {
+        path: '/videos/{slug}/playback',
+        method: 'get',
+        success: '200',
+        errors: ['401', '404', '409', '429'],
+      },
+      {
+        path: '/videos/{slug}/download',
+        method: 'get',
+        success: '200',
+        errors: ['401', '404', '409', '429'],
+      },
+    ];
+
+    function operationOf(path: string, method: string) {
+      const paths = document.paths as Record<
+        string,
+        Record<string, Record<string, unknown>>
+      >;
+      return paths[path]?.[method];
+    }
+
+    it('documents exactly the seven video operations', () => {
+      const paths = document.paths as Record<string, Record<string, unknown>>;
+      const documented = Object.entries(paths)
+        .filter(([path]) => path === '/videos' || path.startsWith('/videos/'))
+        .flatMap(([path, methods]) =>
+          Object.keys(methods).map((method) => `${method} ${path}`),
+        )
+        .sort();
+
+      expect(documented).toEqual(
+        videoOperations.map(({ path, method }) => `${method} ${path}`).sort(),
+      );
+    });
+
+    it.each(videoOperations)(
+      'documents $method $path with security, success and errors',
+      ({ path, method, success, errors }) => {
+        const operation = operationOf(path, method);
+        expect(operation.tags).toEqual(['videos']);
+        expect((operation.summary as string).length).toBeGreaterThan(0);
+        expect(
+          (operation.security as Array<Record<string, unknown>>).some(
+            (requirement) => 'access-token' in requirement,
+          ),
+        ).toBe(true);
+
+        const responses = operation.responses as Record<
+          string,
+          { content?: Record<string, { schema?: Record<string, unknown> }> }
+        >;
+        expect(Object.keys(responses).sort()).toEqual(
+          [success, ...errors].sort(),
+        );
+        expect(
+          responses[success].content?.['application/json']?.schema?.['$ref'],
+        ).toEqual(expect.stringContaining('#/components/schemas/'));
+        for (const status of errors) {
+          expect(
+            responses[status].content?.['application/json']?.schema?.['$ref'],
+          ).toBe(apiErrorRef);
+        }
+      },
+    );
+
+    it('declares the nullable fields of the video response', () => {
+      const components = document.components as Record<string, unknown>;
+      const schemas = components.schemas as Record<
+        string,
+        { properties: Record<string, Record<string, unknown>> }
+      >;
+      const { properties } = schemas['VideoResponseDto'];
+
+      for (const field of [
+        'sizeBytes',
+        'contentType',
+        'durationSeconds',
+        'width',
+        'height',
+        'container',
+        'videoCodec',
+        'audioCodec',
+        'thumbnailUrl',
+        'failureCode',
+      ]) {
+        expect(properties[field].nullable).toBe(true);
+      }
+    });
+  });
 });
