@@ -5,6 +5,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule } from '@nestjs/swagger';
 import { AppModule } from './app.module';
 import { DomainExceptionFilter } from './common/filters/domain-exception.filter';
+import { ThrottlerExceptionFilter } from './common/filters/throttler-exception.filter';
 import { ValidationExceptionFilter } from './common/filters/validation-exception.filter';
 import swaggerConfig from './config/swagger.config';
 import { buildSwaggerDocument } from './swagger/swagger-document';
@@ -26,6 +27,7 @@ async function bootstrap() {
   app.useGlobalFilters(
     new DomainExceptionFilter(),
     new ValidationExceptionFilter(),
+    new ThrottlerExceptionFilter(),
   );
 
   const swagger = app.get<ConfigType<typeof swaggerConfig>>(swaggerConfig.KEY);

@@ -11,6 +11,7 @@ import { RefreshToken } from '../src/auth/entities/refresh-token.entity';
 import { VerificationToken } from '../src/auth/entities/verification-token.entity';
 import type { MailService } from '../src/mail/mail.service';
 import { DomainExceptionFilter } from '../src/common/filters/domain-exception.filter';
+import { ThrottlerExceptionFilter } from '../src/common/filters/throttler-exception.filter';
 import { ValidationExceptionFilter } from '../src/common/filters/validation-exception.filter';
 import { cleanAllTables } from '../src/test/create-test-data-source';
 
@@ -700,6 +701,7 @@ describe('Rate Limiting (e2e)', () => {
     app.useGlobalFilters(
       new DomainExceptionFilter(),
       new ValidationExceptionFilter(),
+      new ThrottlerExceptionFilter(),
     );
     await app.init();
 

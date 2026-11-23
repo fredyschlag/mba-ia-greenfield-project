@@ -23,6 +23,17 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dev
+    command:
+      - sh
+      - -c
+      - |
+        until [ -f node_modules/.package-lock.json ] && [ -x node_modules/.bin/nest ]; do
+          echo 'video-worker: waiting for npm install'
+          sleep 2
+        done
+        exec npm run start:worker:dev
+    init: true
+    restart: unless-stopped
     volumes:
       - .:/home/node/app
     depends_on:
@@ -80,5 +91,3 @@ services:
 volumes:
   minio-data:
   elasticmq-data:
-
-

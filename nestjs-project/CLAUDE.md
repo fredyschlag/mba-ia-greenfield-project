@@ -2,7 +2,7 @@
 
 ## Environment Startup Verification
 
-**Default behavior:** starting the environment means starting **only infrastructure services** (database, mail, etc.) — **never** start the NestJS application server unless the user explicitly asks to run/serve the project (e.g., "rode o projeto", "suba o servidor", "run the app").
+**Default behavior:** starting the environment means starting **only infrastructure services** (database, mail, storage, queue) and the `video-worker`, which starts with Compose — **never** start the NestJS application server unless the user explicitly asks to run/serve the project (e.g., "rode o projeto", "suba o servidor", "run the app").
 
 After starting infrastructure, always confirm the containers are up before proceeding:
 
@@ -13,6 +13,9 @@ docker compose ps   # all services must show status "running"
 Then verify each infrastructure service is actually ready to accept connections — not just running:
 
 - **PostgreSQL:** `docker compose exec db pg_isready -U streamtube` — expect `accepting connections`
+- **MinIO:** `docker compose exec minio curl -fsS http://localhost:9000/minio/health/live` — expect exit code 0
+- **ElasticMQ:** `docker compose exec nestjs-api curl -fsS "http://elasticmq:9324/?Action=ListQueues"` — expect the `video-processing` queues in the response
+- **Video worker:** `docker compose exec video-worker pgrep -f dist-worker/worker` — expect a process id
 
 Only start the NestJS dev server (`npm run start:dev`) when the user **explicitly** asks to run the application — never as part of "start the environment".
 
@@ -34,6 +37,10 @@ docker compose exec nestjs-api npm run start:dev
 Services:
 - `nestjs-api` — NestJS API, port `3000`
 - `db` — PostgreSQL 17, port `5432`, database `streamtube`, user/password `streamtube`
+- `video-worker` — processes videos with FFmpeg, starts with Compose in watch mode, no HTTP port
+- `minio` — S3-compatible storage, port `127.0.0.1:9000`, bucket `streamtube`
+- `elasticmq` — SQS-compatible queue, reachable only inside the Compose network at `elasticmq:9324`
+- `mailpit` — SMTP capture, ports `1025` and `8025`
 
 All verification and teardown commands run on the **host machine**:
 
@@ -148,6 +155,46 @@ NestJS with standard module structure. Source lives in `src/`, compiled output i
 
 - Each domain feature gets its own module (e.g., `UsersModule`, `VideosModule`) registered in `AppModule`
 - Controllers handle HTTP routing; Services hold business logic; both are scoped to their module
+
+## Videos
+
+The upload goes directly from the client to the storage through presigned multipart URLs. The API never handles video bytes.
+
+- **Pipeline:** `draft` → `processing` → `ready` or `failed`. `VideoUploadsService` runs the upload, `VideosService` serves metadata, playback and download.
+- **Worker (`src/video-worker/`):** `VideoProcessingConsumer` handles one job per replica, `VideoProcessorService` extracts metadata and the thumbnail, `VideoReconcilerService` resends lost jobs, `VideoDlqConsumer` records exhausted jobs and `VideoCleanupService` removes expired drafts and failed videos' objects.
+- **Build output:** the API compiles to `dist/` and the worker to `dist-worker/`, because both share the same volume and `deleteOutDir` would erase the other process's output.
+- **Accepted formats:** see `src/video-worker/media-allowlist.ts`. There is no transcoding.
+- **Storage:** one private bucket, with keys `videos/{videoId}/source` and `videos/{videoId}/thumbnail.jpg`.
+
+All video routes require a Bearer token and act only on the caller's channel. A video from another channel responds `404 VIDEO_NOT_FOUND`. Rate limits apply per user and per route.
+
+| Route | Purpose | Success | Limit per 60s |
+|-------|---------|---------|---------------|
+| `POST /videos` | Start the multipart upload and create the `draft`, with at most 3 active uploads per channel | 201 | 10 |
+| `POST /videos/:id/upload/part-urls` | Sign a batch of up to 50 parts | 201 | 60 |
+| `GET /videos/:id/upload/parts` | List uploaded parts to resume an upload | 200 | 30 |
+| `POST /videos/:id/upload/complete` | Validate the size, complete the object and enqueue processing | 202 | 10 |
+| `GET /videos/:slug` | Return status and metadata through the unique URL | 200 | 120 |
+| `GET /videos/:slug/playback` | Return `{ url, expiresAt }` for streaming with Range/206 | 200 | 30 |
+| `GET /videos/:slug/download` | Return `{ url, expiresAt }` for an attachment download | 200 | 10 |
+
+Playback and download respond `409 VIDEO_NOT_READY` unless the video is `ready`.
+
+```bash
+docker compose logs -f video-worker                  # Follow the worker
+docker compose restart video-worker                  # Restart the worker
+docker compose exec nestjs-api npm run storage:setup # Create the bucket and CORS rules (idempotent)
+docker compose exec nestjs-api npm run build         # Compile the API and worker entry points to dist/
+docker compose exec video-worker npm run start:worker # Run the compiled worker from dist/
+```
+
+Manual smoke test, with the API server running:
+
+```bash
+docker compose exec nestjs-api npx ts-node scripts/smoke-video-upload.ts <file> --expect ready
+```
+
+**Test infrastructure:** tests use the real Compose services, with no storage or queue mocks in e2e: database `streamtube_test`, bucket `streamtube-test` and queues `video-processing-test` and `video-processing-test-dlq`. `src/test/test-env.setup.ts` applies these names, and guards refuse to clean anything else. For empty-queue checks, use `queueDepth` or a read with `WaitTimeSeconds: 0`, never the long polling of `receive()`.
 
 ## Code Conventions
 
