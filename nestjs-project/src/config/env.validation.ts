@@ -1,4 +1,5 @@
 import * as Joi from 'joi';
+import { DEFAULT_VIDEO_MAX_UPLOAD_BYTES } from './video.config';
 
 export const envValidationSchema = Joi.object({
   NODE_ENV: Joi.string()
@@ -21,4 +22,18 @@ export const envValidationSchema = Joi.object({
   MAIL_PORT: Joi.number().default(1025),
   MAIL_FROM: Joi.string().default('"StreamTube" <noreply@streamtube.com>'),
   SWAGGER_ENABLED: Joi.string().valid('true', 'false').default('false'),
+  S3_ENDPOINT: Joi.string().uri(),
+  S3_PUBLIC_ENDPOINT: Joi.string().uri().required(),
+  S3_REGION: Joi.string().required(),
+  S3_BUCKET: Joi.string().required(),
+  AWS_ACCESS_KEY_ID: Joi.string(),
+  AWS_SECRET_ACCESS_KEY: Joi.string(),
+  SQS_ENDPOINT: Joi.string().uri(),
+  SQS_REGION: Joi.string().required(),
+  SQS_VIDEO_PROCESSING_QUEUE_URL: Joi.string().uri().required(),
+  SQS_VIDEO_PROCESSING_DLQ_URL: Joi.string().uri().required(),
+  VIDEO_MAX_UPLOAD_BYTES: Joi.number()
+    .integer()
+    .positive()
+    .default(DEFAULT_VIDEO_MAX_UPLOAD_BYTES),
 });
