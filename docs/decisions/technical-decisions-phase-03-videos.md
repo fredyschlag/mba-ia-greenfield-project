@@ -328,7 +328,7 @@ _Subprojects in scope:_
 - **Pros:** Sem colisões e com URLs muito curtas.
 - **Cons:** A ordem pode ser inferida, o que enfraquece vídeos unlisted.
 
-**Recommendation:** **Option A (base62 de 11 caracteres + `UNIQUE`)** — mantém a URL curta e adequada a links não listados sem adicionar dependência. Mesmo com 1 bilhão de vídeos, a chance de um novo slug colidir é de cerca de 2 × 10⁻¹¹, e a restrição do banco cobre esse caso. O `slug` é o identificador das rotas de acesso ao vídeo: `GET /videos/:slug`, `GET /videos/:slug/playback` e `GET /videos/:slug/download`. O UUID continua sendo a referência interna em chaves de storage, mensagens da fila e na orquestração do upload.
+**Recommendation:** **Option A (base62 de 11 caracteres + `UNIQUE`)** — mantém a URL curta e adequada a links não listados sem adicionar dependência. Mesmo com 1 bilhão de vídeos, a chance de um novo slug colidir é de cerca de 2 × 10⁻¹¹, e a restrição do banco cobre esse caso. O `slug` é o identificador das rotas de acesso ao vídeo: `GET /videos/:slug`, `GET /videos/:slug/playback` e `GET /videos/:slug/download`. O UUID continua sendo a referência interna em chaves de storage, mensagens da fila e na orquestração do upload. Quando a inserção ocorrer dentro de uma transação, como no TD-17, cada tentativa usa `SAVEPOINT`, porque uma violação `23505` aborta a transação no PostgreSQL.
 
 **Decision:** _[pending]_
 
@@ -467,7 +467,7 @@ _Subprojects in scope:_
 - **Pros:** Controle total de acesso em cada requisição.
 - **Cons:** Coloca todo o tráfego de vídeo na API, contrariando o objetivo de performance da fase.
 
-**Recommendation:** **Option A (URLs pré-assinadas em JSON)** — aproveita o Range nativo do storage e funciona com o BFF já decidido. Assinar `ResponseContentType` com o tipo validado pelo ffprobe e `ResponseContentDisposition` (`inline` no streaming, `attachment` com nome sanitizado no download). Validade proposta: `max(1h, 2 × duração)` para streaming e 6h para download. As regras de acesso público ficam para as Fases 04 e 05.
+**Recommendation:** **Option A (URLs pré-assinadas em JSON)** — aproveita o Range nativo do storage e funciona com o BFF já decidido. Assinar `ResponseContentType` com o tipo validado pelo ffprobe e `ResponseContentDisposition` (`inline` no streaming, `attachment` com nome sanitizado no download). Validade proposta: `max(1h, 2 × duração)` para streaming e 6h para download. As rotas só assinam URLs para vídeos em `ready`. Nos demais status, respondem `409` com o código `VIDEO_NOT_READY`, no envelope de `phase-02-auth/TD-07`. As regras de acesso público ficam para as Fases 04 e 05.
 
 **Decision:** _[pending]_
 
@@ -590,6 +590,109 @@ _Subprojects in scope:_
 
 ---
 
+## TD-17: Política de limites dos endpoints de vídeo
+
+**Scope:** Backend
+
+**Capability:** Upload de vídeos com suporte a arquivos de até 10GB sem impacto na performance
+
+**Context:** O `ThrottlerGuard` é global, registrado com `APP_GUARD` em `nestjs-project/src/auth/auth.module.ts`, e aplica 10 requisições por 60 segundos, com contador por rota e IP. Esse padrão alcançaria os endpoints de vídeo. No BFF estrito, o cliente `upstream` não encaminha o IP do navegador e a API não configura `trust proxy`, então usuários diferentes podem compartilhar o mesmo contador. Os limites atuais das rotas de autenticação não podem ser afrouxados. Depende de TD-05, TD-06, TD-08, TD-09 e TD-13.
+
+**Options:**
+
+### Option A: `@Throttle` por rota, por usuário, com limite de uploads ativos no banco
+
+- Cada rota de vídeo sobrescreve `limit`, `ttl` e `getTracker` do throttler `default`, usando `req.user.sub`. O PostgreSQL controla o máximo de uploads ativos por canal.
+- **Pros:** Não altera a configuração global nem as rotas de autenticação. Isola usuários atrás do BFF e não adiciona dependência.
+- **Cons:** Cada rota declara seu limite e depende da ordem `JwtAuthGuard` → `ThrottlerGuard`. Os contadores ficam em memória por processo.
+
+### Option B: Throttlers nomeados em `ThrottlerModule.forRoot`
+
+- Adiciona throttlers específicos de vídeo à configuração global, com rastreamento por usuário.
+- **Pros:** Centraliza os limites em um único ponto.
+- **Cons:** Todo throttler nomeado incide sobre todas as rotas até receber `skip`. Em teste com a versão 6.5.0, um throttler `video` com limite 2 fez uma rota pública responder `429` na terceira chamada.
+
+### Option C: Encaminhar o IP real e habilitar `trust proxy`
+
+- O BFF envia `X-Forwarded-For`, a API confia no proxy e mantém o rastreamento por IP.
+- **Pros:** Segue o padrão documentado do throttler para aplicações atrás de proxy.
+- **Cons:** Exige mudar o BFF, fora do escopo. Daria um contador por cliente às rotas de autenticação, afrouxando o limite efetivo atual. Usuários atrás do mesmo NAT continuariam compartilhando limite.
+
+### Option D: `@SkipThrottle` nas rotas de vídeo
+
+- Remove o throttling dessas rotas e mantém apenas o limite de uploads ativos.
+- **Pros:** Implementação mínima e nenhum `429` no fluxo de upload.
+- **Cons:** Assinaturas, `ListParts`, consultas e URLs de reprodução ficam sem proteção contra abuso.
+
+**Recommendation:** **Option A (`@Throttle` por usuário + limite de uploads ativos)** — é a única opção que protege as rotas de vídeo por usuário sem tocar nos limites de autenticação. Limites propostos, por usuário e por rota:
+
+| Operação | Requisições por 60s |
+|----------|--------------------:|
+| Criação do upload (`POST /videos`) | 10 |
+| Assinatura de lote, com até 50 partes | 60 |
+| Retomada (`ListParts`) | 30 |
+| Conclusão do upload | 10 |
+| Consulta (`GET /videos/:slug`) | 120 |
+| Playback (`GET /videos/:slug/playback`) | 30 |
+| Download (`GET /videos/:slug/download`) | 10 |
+
+- **Dimensionamento:** 640 partes exigem 13 lotes de 50. Três uploads simultâneos somam 39 chamadas, abaixo do limite de 60.
+- **Ordem dos guards:** manter `JwtAuthGuard` antes de `ThrottlerGuard`, como já está registrado. O `getTracker` usa `req.user.sub`, sem fallback para IP. Em teste com os guards reais, chamadas sem token receberam `401` sem consumir o contador do usuário, e a ordem invertida resultou em `500`, o que deve ser protegido por teste e2e.
+- **Autenticação:** não alterar `ThrottlerModule.forRoot`. Rotas `@Public()` continuam com 10 requisições por 60 segundos, rastreadas por IP.
+- **Uploads ativos:** máximo de 3 por canal, contando `draft` com `upload_expires_at` futuro, o que limita a 30 GiB o volume em andamento. A API faz uma checagem antes de `CreateMultipartUpload`. Depois, em transação, bloqueia o canal com `FOR UPDATE`, reconta e insere o rascunho. Se o limite foi atingido, aborta o multipart e responde `409` com `ACTIVE_UPLOAD_LIMIT_REACHED`, no envelope de `phase-02-auth/TD-07`.
+- **Limitações aceitas:** com várias réplicas da API, o limite efetivo do throttler em memória se multiplica, e um storage compartilhado fica para a Fase 07. O limite de uploads ativos permanece exato por estar no banco. Esta política não cria cota total de armazenamento por canal, porque o plano não define esse requisito.
+
+**Decision:** _[pending]_
+
+---
+
+## TD-18: Destino dos objetos de vídeos em `failed`
+
+**Scope:** Backend
+
+**Capability:** Serviço de armazenamento de arquivos (vídeos e thumbnails)
+
+**Context:** O TD-07 já remove o objeto quando o tamanho final diverge, e o TD-08 cobre apenas uploads abandonados. Nos demais casos, um vídeo em `failed` pode manter até 10GB sem destino definido. As falhas têm naturezas diferentes: `UNSUPPORTED_FORMAT` (TD-12) e outros erros permanentes não melhoram com nova tentativa, enquanto `PROCESSING_EXHAUSTED` (TD-15) pode resultar de instabilidade com um arquivo válido. A fase não tem endpoint de reprocessamento, o plano não lista fluxo de exclusão de vídeos e seus pontos de atenção pedem planejamento de custo de armazenamento. O registro em `failed` deve continuar no banco para o dono ver o resultado. Depende de TD-03, TD-07, TD-08, TD-12, TD-14 e TD-15.
+
+**Options:**
+
+### Option A: Remover em toda falha permanente
+
+- Qualquer vídeo que termine em `failed` tem seus objetos removidos, mantendo apenas o registro.
+- **Pros:** Menor custo e regra única.
+- **Cons:** Uma instabilidade que esgote as tentativas apagaria um upload válido de até 10GB, sem chance de recuperação.
+
+### Option B: Reter todas as falhas por um prazo definido
+
+- Todo objeto em `failed` fica retido por 7 dias e depois é removido pela varredura.
+- **Pros:** Regra única e janela para diagnóstico.
+- **Cons:** Paga armazenamento por arquivos `UNSUPPORTED_FORMAT`, que nenhum reprocessamento aproveitaria sem transcodificação.
+
+### Option C: Manter até existir um fluxo de exclusão
+
+- Os objetos permanecem até uma fase futura criar a exclusão de vídeos.
+- **Pros:** Nenhum arquivo é perdido e não há código nesta fase.
+- **Cons:** O custo cresce sem limite, e o plano atual não prevê esse fluxo.
+
+### Option D: Retenção por classe de falha
+
+- Erros permanentes, incluindo `UNSUPPORTED_FORMAT`, liberam os objetos na próxima varredura. `PROCESSING_EXHAUSTED` retém os objetos por 7 dias.
+- **Pros:** Não paga por arquivos sem uso e preserva uploads possivelmente válidos durante uma instabilidade.
+- **Cons:** Exige campos de controle e uma regra por classe. O usuário precisa reenviar um arquivo recusado depois de convertê-lo.
+
+**Recommendation:** **Option D (retenção por classe de falha)** — limita o custo sem transformar uma falha de infraestrutura em perda definitiva do upload.
+
+- **Registro:** o vídeo permanece em `failed` com `failure_code`, `storage_purge_after` e `storage_purged_at`.
+- **Prazo:** o mesmo `UPDATE` que marca `failed` define `storage_purge_after` como agora para erros permanentes e como agora + 7 dias para `PROCESSING_EXHAUSTED`. Cada vídeo retido ocupa no máximo 10 GiB por 7 dias.
+- **Remoção:** o job agendado do TD-08 também seleciona vídeos vencidos com `FOR UPDATE SKIP LOCKED`, remove `videos/{videoId}/source` e `videos/{videoId}/thumbnail.jpg` e só então preenche `storage_purged_at`. Como `DeleteObject` é idempotente, uma queda é coberta pela execução seguinte.
+- **TD-07:** a remoção por divergência de tamanho continua imediata e preenche `storage_purged_at`.
+- **Acesso:** as rotas do TD-13 não assinam URLs para vídeos em `failed`.
+- **Recuperação:** não há endpoint nesta fase. Dentro dos 7 dias, uma operação manual pode devolver o vídeo a `processing`, limpar os campos de falha e de purge e deixar `job_enqueued_at` nulo, para o reconciliador do TD-14 reenviar o job.
+
+**Decision:** _[pending]_
+
+---
+
 ## Decisions Summary
 
 | ID | Scope | Decision | Recommendation | Choice |
@@ -610,6 +713,8 @@ _Subprojects in scope:_
 | TD-14 | Backend | Modelo de status do vídeo | A — status do pipeline | _[pending]_ |
 | TD-15 | Backend | Retentativas, idempotência e falhas | A — at-least-once idempotente | _[pending]_ |
 | TD-16 | Backend | Estratégia de testes | A — pirâmide com Compose real | _[pending]_ |
+| TD-17 | Backend | Política de limites dos endpoints de vídeo | A — `@Throttle` por usuário + limite de uploads ativos | _[pending]_ |
+| TD-18 | Backend | Destino dos objetos de vídeos em `failed` | D — retenção por classe de falha | _[pending]_ |
 
 ---
 

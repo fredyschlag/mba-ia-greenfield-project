@@ -4,8 +4,8 @@ name: phase-03-videos
 status: dirty
 issue_count: 22
 sources_mtime:
-  docs/phases/phase-03-videos/context.md: "2026-11-22T20:19:01-03:00"
-  docs/decisions/technical-decisions-phase-03-videos.md: "2026-11-22T20:14:46-03:00"
+  docs/phases/phase-03-videos/context.md: "2026-11-22T20:46:28-03:00"
+  docs/decisions/technical-decisions-phase-03-videos.md: "2026-11-22T20:41:07-03:00"
 issues:
   - id: IC-1
     status: open
@@ -19,12 +19,6 @@ issues:
   - id: AMB-3
     status: open
     summary: "Rascunho pode significar upload ou estado editorial da Fase 04"
-  - id: MD-1
-    status: open
-    summary: "Sem política de limites para endpoints de upload e vídeo"
-  - id: MD-2
-    status: open
-    summary: "Sem política de retenção para objetos de vídeos em falha"
   - id: OQ-1
     status: open
     summary: "TD-01 pending — Tecnologia da fila de processamento"
@@ -73,6 +67,12 @@ issues:
   - id: OQ-16
     status: open
     summary: "TD-16 pending — Estratégia de testes com a infraestrutura real"
+  - id: OQ-17
+    status: open
+    summary: "TD-17 pending — Política de limites dos endpoints de vídeo"
+  - id: OQ-18
+    status: open
+    summary: "TD-18 pending — Destino dos objetos de vídeos em `failed`"
 advisories: []
 ---
 
@@ -94,8 +94,7 @@ _A severidade é uma classificação auxiliar de impacto. Toda issue aberta bloq
 
 ### Missing Decisions
 
-- **MD-1** — Severidade: alta. Afeta "Upload de vídeos com suporte a arquivos de até 10GB sem impacto na performance" e o herdado `phase-02-auth/TD-08`. O TD herdado descreve o throttling como restrito ao `AuthModule`, mas `nestjs-project/src/auth/auth.module.ts` registra `ThrottlerGuard` com `APP_GUARD`, que o NestJS aplica globalmente. Os novos endpoints de vídeo herdariam esse limite, e nenhum TD define limites para assinatura de partes, retomada, consultas de reprodução ou uploads simultâneos por canal. Explicit choice: adicionar um TD com a política de limites desses endpoints, incluindo exceções ao throttler global e o máximo de uploads ativos por canal.
-- **MD-2** — Severidade: média. Afeta "Serviço de armazenamento de arquivos (vídeos e thumbnails)", `phase-03-videos/TD-08`, `phase-03-videos/TD-12` e `phase-03-videos/TD-15`. O TD-08 trata de uploads abandonados, mas nenhum TD indexado define o destino de um objeto de até 10GB quando o vídeo termina em `failed`, e a fase não prevê fluxo de exclusão. Explicit choice: adicionar um TD escolhendo entre remover o objeto na falha permanente, retê-lo por um prazo definido ou mantê-lo até existir um fluxo de exclusão.
+_None._
 
 ### Dependency Gaps
 
@@ -123,6 +122,8 @@ _None._
 - **OQ-14** — Severidade: alta. TD-14 pending — Modelo de status do vídeo. Resolution: fill the **Decision:** field of TD-14 in `docs/decisions/technical-decisions-phase-03-videos.md`, then re-run `/plan-validate phase-03-videos`.
 - **OQ-15** — Severidade: média. TD-15 pending — Retentativas, idempotência e tratamento de falhas. Resolution: fill the **Decision:** field of TD-15 in `docs/decisions/technical-decisions-phase-03-videos.md`, then re-run `/plan-validate phase-03-videos`.
 - **OQ-16** — Severidade: alta. TD-16 pending — Estratégia de testes com a infraestrutura real. Resolution: fill the **Decision:** field of TD-16 in `docs/decisions/technical-decisions-phase-03-videos.md`, then re-run `/plan-validate phase-03-videos`.
+- **OQ-17** — Severidade: alta. TD-17 pending — Política de limites dos endpoints de vídeo. Substitui o antigo `MD-1`, pois a decisão agora tem TD. A escolha deve considerar o throttling herdado de `phase-02-auth/TD-08`, as exceções para os endpoints de vídeo e o máximo de uploads ativos por canal. Resolution: fill the **Decision:** field of TD-17 in `docs/decisions/technical-decisions-phase-03-videos.md`, then re-run `/plan-validate phase-03-videos`.
+- **OQ-18** — Severidade: média. TD-18 pending — Destino dos objetos de vídeos em `failed`. Substitui o antigo `MD-2`, pois a decisão agora tem TD. Resolution: fill the **Decision:** field of TD-18 in `docs/decisions/technical-decisions-phase-03-videos.md`, then re-run `/plan-validate phase-03-videos`.
 
 ### UI Coverage Gaps
 
