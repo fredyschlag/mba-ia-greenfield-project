@@ -203,7 +203,7 @@ Entregar o backend de upload de até 10 GiB, com pré-cadastro automático como 
 ### SI-03.7 — Endpoint POST /videos
 
 **Route:** POST /videos
-**Test Specs:** _pending /plan-test-specs_
+**Test Specs:** see `nestjs-project/specs/videos-create.plan.md`
 **Authorization:** Authenticated, no próprio canal
 
 **Description:** Inicia o multipart e cria o rascunho em uma única chamada, com slug único e limite de uploads ativos por canal.
@@ -243,7 +243,7 @@ Entregar o backend de upload de até 10 GiB, com pré-cadastro automático como 
 ### SI-03.8 — Endpoints de assinatura de partes e retomada
 
 **Route:** POST /videos/:id/upload/part-urls; GET /videos/:id/upload/parts
-**Test Specs:** _pending /plan-test-specs_
+**Test Specs:** see `nestjs-project/specs/videos-upload-parts.plan.md`
 **Authorization:** Owner
 
 **Description:** Permite enviar as partes diretamente ao storage e retomar um upload interrompido.
@@ -279,7 +279,7 @@ Entregar o backend de upload de até 10 GiB, com pré-cadastro automático como 
 ### SI-03.9 — Endpoint de conclusão do upload
 
 **Route:** POST /videos/:id/upload/complete
-**Test Specs:** _pending /plan-test-specs_
+**Test Specs:** see `nestjs-project/specs/videos-upload-complete.plan.md`
 **Authorization:** Owner
 
 **Description:** Valida o tamanho real, conclui o objeto e inicia o processamento de forma idempotente.
@@ -448,7 +448,7 @@ Entregar o backend de upload de até 10 GiB, com pré-cadastro automático como 
 ### SI-03.14 — Endpoints de consulta, streaming e download
 
 **Route:** GET /videos/:slug; GET /videos/:slug/playback; GET /videos/:slug/download
-**Test Specs:** _pending /plan-test-specs_
+**Test Specs:** see `nestjs-project/specs/videos-access.plan.md`
 **Authorization:** Owner
 
 **Description:** Expõe o vídeo pela URL única e entrega streaming e download por URLs pré-assinadas, restritos ao dono.
